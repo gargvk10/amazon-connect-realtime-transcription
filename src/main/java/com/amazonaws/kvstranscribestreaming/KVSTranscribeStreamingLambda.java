@@ -77,6 +77,9 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<Transcriptio
     public static final MetricsUtil metricsUtil = new MetricsUtil(AmazonCloudWatchClientBuilder.defaultClient());
     private static final DateFormat DATE_FORMAT = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSZ");
 
+    private static final String FROM_CUSTOMER_SQS = "https://sqs.us-west-2.amazonaws.com/727348040440/TestSQSTranscriptToPolly.fifo";
+    private static final String TO_CUSTOMER_SQS = "https://sqs.us-west-2.amazonaws.com/727348040440/ToCustomerSQSToPolly.fifo";
+
 
     // SegmentWriter saves Transcription segments to DynamoDB
     private TranscribedSegmentWriter fromCustomerSegmentWriter = null;
@@ -103,8 +106,10 @@ public class KVSTranscribeStreamingLambda implements RequestHandler<Transcriptio
             AmazonDynamoDBClientBuilder builder = AmazonDynamoDBClientBuilder.standard();
             builder.setRegion(REGION.getName());
             fromCustomerSegmentWriter = new TranscribedSegmentWriter(request.getConnectContactId(), new DynamoDB(builder.build()),
+                    FROM_CUSTOMER_SQS,
                     CONSOLE_LOG_TRANSCRIPT_FLAG);
             toCustomerSegmentWriter = new TranscribedSegmentWriter(request.getConnectContactId(), new DynamoDB(builder.build()),
+                    TO_CUSTOMER_SQS,
                     CONSOLE_LOG_TRANSCRIPT_FLAG);
 
             // If an inputFileName has been provided in the request, stream audio from the file to Transcribe

@@ -79,7 +79,6 @@ public class KVSByteToAudioEventSubscription implements Subscription {
                 while (demand.get() > 0) {
                     // return byteBufferDetails and consume this with an input stream then feed to output stream
                     ByteBuffer audioBuffer = KVSUtils.getByteBufferFromStream(streamingMkvReader, fragmentVisitor, tagProcessor, contactId, CHUNK_SIZE_IN_KB, track);
-
                     if (audioBuffer.remaining() > 0) {
 
                         AudioEvent audioEvent = audioEventFromBuffer(audioBuffer);
