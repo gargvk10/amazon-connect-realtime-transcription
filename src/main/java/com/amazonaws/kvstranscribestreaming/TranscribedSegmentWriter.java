@@ -1,5 +1,14 @@
 package com.amazonaws.kvstranscribestreaming;
 
+import com.amazonaws.services.translate.AmazonTranslate;
+import com.amazonaws.services.translate.AmazonTranslateClient;
+import com.amazonaws.services.translate.model.TranslateTextRequest;
+import com.amazonaws.services.translate.model.TranslateTextResult;
+
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
+import com.amazonaws.services.sqs.model.SendMessageRequest;
+
 import com.amazonaws.services.dynamodbv2.document.DynamoDB;
 import com.amazonaws.services.dynamodbv2.document.Item;
 import org.apache.commons.lang3.Validate;
@@ -34,42 +43,65 @@ public class TranscribedSegmentWriter {
 
     private String contactId;
     private DynamoDB ddbClient;
+    private AmazonTranslate translateClient;
+    private AmazonSQS sqsClient;
+    private String sqsUrl;
     private Boolean consoleLogTranscriptFlag;
     private static final boolean SAVE_PARTIAL_TRANSCRIPTS = Boolean.parseBoolean(System.getenv("SAVE_PARTIAL_TRANSCRIPTS"));
     private static final Logger logger = LoggerFactory.getLogger(TranscribedSegmentWriter.class);
+    private static final String SQS_MESSAGE_ID = "test";
+    private static final String ENGLISH_LANG_CODE = "en";
+    private static final String SPANISH_LANG_CODE = "es";
+    private static final String CHECK_PARTIAL_KEY = "IsPartial";
+    private static final String TRANSCRIPT_KEY = "Transcript";
 
-    public TranscribedSegmentWriter(String contactId, DynamoDB ddbClient, Boolean consoleLogTranscriptFlag) {
 
+    /**
+     * Now takes in SQS queue URL to distinguish which queue the transcribed segments will be written to.
+     */
+    public TranscribedSegmentWriter(String contactId, DynamoDB ddbClient, String sqsUrl, Boolean consoleLogTranscriptFlag) {
         this.contactId = Validate.notNull(contactId);
         this.ddbClient = Validate.notNull(ddbClient);
         this.consoleLogTranscriptFlag = Validate.notNull(consoleLogTranscriptFlag);
+        this.sqsUrl=sqsUrl;
+        translateClient = AmazonTranslateClient.builder().build();
+        sqsClient = AmazonSQSClientBuilder.defaultClient();
     }
 
     public String getContactId() {
-
         return this.contactId;
     }
 
     public DynamoDB getDdbClient() {
-
         return this.ddbClient;
     }
 
-    public void writeToDynamoDB(TranscriptEvent transcriptEvent, String tableName) {
+    public AmazonSQS getSqsClient(){
+        return this.sqsClient;
+    }
+
+    public void translateTranscribe(TranscriptEvent transcriptEvent, String tableName) {
         logger.info("table name: " + tableName);
         logger.info("Transcription event: " + transcriptEvent.transcript().toString());
         List<Result> results = transcriptEvent.transcript().results();
         if (results.size() > 0) {
-
             Result result = results.get(0);
-
             if (SAVE_PARTIAL_TRANSCRIPTS || !result.isPartial()) {
                 try {
                     Item ddbItem = toDynamoDbItem(result);
                     if (ddbItem != null) {
+                        if(!ddbItem.getBoolean(CHECK_PARTIAL_KEY)){
+                            String finalTranscript = ddbItem.getString(TRANSCRIPT_KEY);
+                            logger.info("Final Untranslated Transcript: " + finalTranscript);
+                            String translatedTranscript = translateText(ENGLISH_LANG_CODE, SPANISH_LANG_CODE, finalTranscript);
+                            sendToSQS(translatedTranscript);
+                        }
+                        logger.info("Putting item in DynamoDB");
+                        long cur = System.currentTimeMillis();
                         getDdbClient().getTable(tableName).putItem(ddbItem);
+                        long diff = System.currentTimeMillis() - cur;
+                        logger.info("Item in DynamoDB (milli): " + diff);
                     }
-
                 } catch (Exception e) {
                     logger.error("Exception while writing to DDB: ", e);
                 }
@@ -77,18 +109,66 @@ public class TranscribedSegmentWriter {
         }
     }
 
-    private Item toDynamoDbItem(Result result) {
+    /**
+     * This method uses Amazon Translate Client to translate the text passed as a paramater according to its
+     * source language code and target language code
+     * @param sourceLangCode This signifies the language the text is written in
+     * @param targetLangCode  This signifies the language for the text to translate to
+     * @param text This is the text to translate
+     * @return String This is the translated text
+     */
+    private String translateText(String sourceLangCode, String targetLangCode, String text){
+        long cur= System.currentTimeMillis();
+        logger.info("Starting Translation: " + text);
+        try{
+            TranslateTextRequest request = new TranslateTextRequest()
+                    .withText(text)
+                    .withSourceLanguageCode(sourceLangCode)
+                    .withTargetLanguageCode(targetLangCode);
+            TranslateTextResult translateResult = translateClient.translateText(request);
+            long diff = System.currentTimeMillis() - cur;
+            String translated = translateResult.getTranslatedText();
+            logger.info("Translation: " + translated);
+            logger.info("Translation time (milli): " + diff);
+            return translated;
+        } catch (Exception e){
+            logger.error("Exception while translating transcript: ", e);
+            return text;
+        }
+    }
 
+    /**
+     * This method uses Amazon SQS client to send the translated message to its respective SQS queue
+     * @param message This is the message to send to the SQS Queue
+     */
+    private void sendToSQS(String message){
+        logger.info("Sending Message to SQS");
+        long cur = System.currentTimeMillis();
+        try{
+            SendMessageRequest send_msg_request = new SendMessageRequest()
+                    .withQueueUrl(sqsUrl)
+                    .withMessageBody(message)
+                    .withMessageGroupId(SQS_MESSAGE_ID)
+                    .withMessageDeduplicationId(SQS_MESSAGE_ID + cur);
+            getSqsClient().sendMessage(send_msg_request);
+            long diff = System.currentTimeMillis() - cur;
+            logger.info("Sending message to SQS time (milli): " + diff);
+        } catch (Exception e){
+            logger.error("Exception while sending message to SQS: ", e);
+        }
+
+    }
+
+    private Item toDynamoDbItem(Result result) {
+        logger.info("Creating DynamoDB Item");
+        long cur = System.currentTimeMillis();
         String contactId = this.getContactId();
         Item ddbItem = null;
-
         NumberFormat nf = NumberFormat.getInstance();
         nf.setMinimumFractionDigits(3);
         nf.setMaximumFractionDigits(3);
-
         if (result.alternatives().size() > 0) {
             if (!result.alternatives().get(0).transcript().isEmpty()) {
-
                 Instant now = Instant.now();
                 ddbItem = new Item()
                         .withKeyComponent("ContactId", contactId)
@@ -101,7 +181,6 @@ public class TranscribedSegmentWriter {
                         .withString("LoggedOn", now.toString())
                         // expire after a week by default
                         .withDouble("ExpiresAfter", now.plusMillis(7 * 24 * 3600).toEpochMilli());
-
                 if (consoleLogTranscriptFlag) {
                     logger.info(String.format("Thread %s %d: [%s, %s] - %s",
                             Thread.currentThread().getName(),
@@ -112,7 +191,8 @@ public class TranscribedSegmentWriter {
                 }
             }
         }
-
+        long diff = System.currentTimeMillis() - cur;
+        logger.info("DynamoDB Item Created (milli): " + diff);
         return ddbItem;
     }
 }

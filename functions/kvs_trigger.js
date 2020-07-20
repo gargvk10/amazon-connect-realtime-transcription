@@ -35,7 +35,7 @@ exports.handler = (event, context, callback) => {
             startFragmentNum: event.Details.ContactData.MediaStreams.Customer.Audio.StartFragmentNumber,
             connectContactId: event.Details.ContactData.ContactId,
             transcriptionEnabled: event.Details.ContactData.Attributes.transcribeCall === "true" ? true : false,
-            saveCallRecording: event.Details.ContactData.Attributes.saveCallRecording === "false" ? false : true,
+            saveCallRecording: event.Details.ContactData.Attributes.saveCallRecording === "true" ? true : false,
             languageCode: event.Details.ContactData.Attributes.languageCode === "es-US" ? "es-US" : "en-US",
             // These default to true for backwards compatability purposes
             streamAudioFromCustomer: event.Details.ContactData.Attributes.streamAudioFromCustomer === "false" ? false : true,
