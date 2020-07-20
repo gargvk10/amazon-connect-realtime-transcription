@@ -45,7 +45,7 @@ public class StreamTranscriptionBehaviorImpl implements StreamTranscriptionBehav
     public void onStream(TranscriptResultStream e) {
         // EventResultStream has other fields related to the timestamp of the transcripts in it.
         // Please refer to the javadoc of TranscriptResultStream for more details
-        segmentWriter.writeToDynamoDBAndSQS((TranscriptEvent) e, tableName);
+        segmentWriter.translateTranscribe((TranscriptEvent) e, tableName);
     }
 
     @Override

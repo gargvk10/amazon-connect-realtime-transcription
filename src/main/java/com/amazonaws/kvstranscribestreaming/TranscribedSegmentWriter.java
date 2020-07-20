@@ -9,7 +9,6 @@ import com.amazonaws.services.sqs.AmazonSQS;
 import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
 import com.amazonaws.services.sqs.model.SendMessageRequest;
 
-
 import com.amazonaws.services.dynamodbv2.document.DynamoDB;
 import com.amazonaws.services.dynamodbv2.document.Item;
 import org.apache.commons.lang3.Validate;
@@ -50,29 +49,30 @@ public class TranscribedSegmentWriter {
     private Boolean consoleLogTranscriptFlag;
     private static final boolean SAVE_PARTIAL_TRANSCRIPTS = Boolean.parseBoolean(System.getenv("SAVE_PARTIAL_TRANSCRIPTS"));
     private static final Logger logger = LoggerFactory.getLogger(TranscribedSegmentWriter.class);
+    private static final String SQS_MESSAGE_ID = "test";
+    private static final String ENGLISH_LANG_CODE = "en";
+    private static final String SPANISH_LANG_CODE = "es";
+    private static final String CHECK_PARTIAL_KEY = "IsPartial";
+    private static final String TRANSCRIPT_KEY = "Transcript";
 
 
     /**
      * Now takes in SQS queue URL to distinguish which queue the transcribed segments will be written to.
      */
     public TranscribedSegmentWriter(String contactId, DynamoDB ddbClient, String sqsUrl, Boolean consoleLogTranscriptFlag) {
-
         this.contactId = Validate.notNull(contactId);
         this.ddbClient = Validate.notNull(ddbClient);
         this.consoleLogTranscriptFlag = Validate.notNull(consoleLogTranscriptFlag);
         this.sqsUrl=sqsUrl;
         translateClient = AmazonTranslateClient.builder().build();
         sqsClient = AmazonSQSClientBuilder.defaultClient();
-
     }
 
     public String getContactId() {
-
         return this.contactId;
     }
 
     public DynamoDB getDdbClient() {
-
         return this.ddbClient;
     }
 
@@ -80,7 +80,7 @@ public class TranscribedSegmentWriter {
         return this.sqsClient;
     }
 
-    public void writeToDynamoDBAndSQS(TranscriptEvent transcriptEvent, String tableName) {
+    public void translateTranscribe(TranscriptEvent transcriptEvent, String tableName) {
         logger.info("table name: " + tableName);
         logger.info("Transcription event: " + transcriptEvent.transcript().toString());
         List<Result> results = transcriptEvent.transcript().results();
@@ -90,21 +90,18 @@ public class TranscribedSegmentWriter {
                 try {
                     Item ddbItem = toDynamoDbItem(result);
                     if (ddbItem != null) {
-                        if(!ddbItem.getBoolean("IsPartial")){
-                            String finalTranscript = ddbItem.getString("Transcript");
-                            logger.info("Final Untranslated Transcript: "+ finalTranscript);
-
-                            String translatedTranscript = translateText("en", "es", finalTranscript);
+                        if(!ddbItem.getBoolean(CHECK_PARTIAL_KEY)){
+                            String finalTranscript = ddbItem.getString(TRANSCRIPT_KEY);
+                            logger.info("Final Untranslated Transcript: " + finalTranscript);
+                            String translatedTranscript = translateText(ENGLISH_LANG_CODE, SPANISH_LANG_CODE, finalTranscript);
                             sendToSQS(translatedTranscript);
                         }
-
                         logger.info("Putting item in DynamoDB");
                         long cur = System.currentTimeMillis();
                         getDdbClient().getTable(tableName).putItem(ddbItem);
-                        long diff = System.currentTimeMillis()-cur;
+                        long diff = System.currentTimeMillis() - cur;
                         logger.info("Item in DynamoDB (milli): " + diff);
                     }
-
                 } catch (Exception e) {
                     logger.error("Exception while writing to DDB: ", e);
                 }
@@ -129,14 +126,13 @@ public class TranscribedSegmentWriter {
                     .withSourceLanguageCode(sourceLangCode)
                     .withTargetLanguageCode(targetLangCode);
             TranslateTextResult translateResult = translateClient.translateText(request);
-            long diff = System.currentTimeMillis()-cur;
+            long diff = System.currentTimeMillis() - cur;
             String translated = translateResult.getTranslatedText();
-            logger.info("Translation: "+ translated);
+            logger.info("Translation: " + translated);
             logger.info("Translation time (milli): " + diff);
             return translated;
         } catch (Exception e){
             logger.error("Exception while translating transcript: ", e);
-            logger.info("Unable to translate. Returning untranslated text");
             return text;
         }
     }
@@ -152,11 +148,11 @@ public class TranscribedSegmentWriter {
             SendMessageRequest send_msg_request = new SendMessageRequest()
                     .withQueueUrl(sqsUrl)
                     .withMessageBody(message)
-                    .withMessageGroupId("test")
-                    .withMessageDeduplicationId("test"+cur);
+                    .withMessageGroupId(SQS_MESSAGE_ID)
+                    .withMessageDeduplicationId(SQS_MESSAGE_ID + cur);
             getSqsClient().sendMessage(send_msg_request);
-            long diff = System.currentTimeMillis()-cur;
-            System.out.println("Sending message to SQS time (milli): " + diff);
+            long diff = System.currentTimeMillis() - cur;
+            logger.info("Sending message to SQS time (milli): " + diff);
         } catch (Exception e){
             logger.error("Exception while sending message to SQS: ", e);
         }
@@ -185,7 +181,6 @@ public class TranscribedSegmentWriter {
                         .withString("LoggedOn", now.toString())
                         // expire after a week by default
                         .withDouble("ExpiresAfter", now.plusMillis(7 * 24 * 3600).toEpochMilli());
-
                 if (consoleLogTranscriptFlag) {
                     logger.info(String.format("Thread %s %d: [%s, %s] - %s",
                             Thread.currentThread().getName(),
@@ -196,7 +191,7 @@ public class TranscribedSegmentWriter {
                 }
             }
         }
-        long diff = System.currentTimeMillis()-cur;
+        long diff = System.currentTimeMillis() - cur;
         logger.info("DynamoDB Item Created (milli): " + diff);
         return ddbItem;
     }
